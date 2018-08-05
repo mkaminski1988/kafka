@@ -124,6 +124,8 @@ public class Selector implements Selectable, AutoCloseable {
     //indicates if the previous call to poll was able to make progress in reading already-buffered data.
     //this is used to prevent tight loops when memory is not available to read any more data
     private boolean madeReadProgressLastPoll = true;
+    private final long forcedDisconnectIntervalMs;
+    private long lastScheduledDisconnectCheck = System.currentTimeMillis();
 
     /**
      * Create a new nioSelector
@@ -147,7 +149,8 @@ public class Selector implements Selectable, AutoCloseable {
             boolean recordTimePerConnection,
             ChannelBuilder channelBuilder,
             MemoryPool memoryPool,
-            LogContext logContext) {
+            LogContext logContext,
+            long forcedDisconnectIntervalMs) {
         try {
             this.nioSelector = java.nio.channels.Selector.open();
         } catch (IOException e) {
@@ -174,6 +177,7 @@ public class Selector implements Selectable, AutoCloseable {
         this.memoryPool = memoryPool;
         this.lowMemThreshold = (long) (0.1 * this.memoryPool.size());
         this.log = logContext.logger(Selector.class);
+        this.forcedDisconnectIntervalMs = forcedDisconnectIntervalMs;
     }
 
     public Selector(int maxReceiveSize,
@@ -185,7 +189,7 @@ public class Selector implements Selectable, AutoCloseable {
             boolean metricsPerConnection,
             ChannelBuilder channelBuilder,
             LogContext logContext) {
-        this(maxReceiveSize, connectionMaxIdleMs, metrics, time, metricGrpPrefix, metricTags, metricsPerConnection, false, channelBuilder, MemoryPool.NONE, logContext);
+        this(maxReceiveSize, connectionMaxIdleMs, metrics, time, metricGrpPrefix, metricTags, metricsPerConnection, false, channelBuilder, MemoryPool.NONE, logContext, -1);
     }
 
     public Selector(long connectionMaxIdleMS, Metrics metrics, Time time, String metricGrpPrefix, ChannelBuilder channelBuilder, LogContext logContext) {
@@ -442,6 +446,8 @@ public class Selector implements Selectable, AutoCloseable {
         // Add to completedReceives after closing expired connections to avoid removing
         // channels with completed receives until all staged receives are completed.
         addToCompletedReceives();
+
+        maybeForceDisconnections();
     }
 
     /**
@@ -647,6 +653,19 @@ public class Selector implements Selectable, AutoCloseable {
                 close(channel, CloseMode.GRACEFUL);
             }
         }
+    }
+
+    private void maybeForceDisconnections() {
+        if (forcedDisconnectIntervalMs < 0) {
+            return;
+        }
+        if (lastScheduledDisconnectCheck > System.currentTimeMillis() - forcedDisconnectIntervalMs) {
+            return;
+        }
+        channels.forEach((key, channel) -> {
+            channel.disconnect();
+        });
+        lastScheduledDisconnectCheck = System.currentTimeMillis();
     }
 
     /**

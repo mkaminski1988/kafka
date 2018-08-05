@@ -563,7 +563,8 @@ private[kafka] class Processor(val id: Int,
       true,
       channelBuilder,
       memoryPool,
-      logContext)
+      logContext,
+      60000)
   }
 
   // Connection ids have the format `localAddr:localPort-remoteAddr:remotePort-index`. The index is a
